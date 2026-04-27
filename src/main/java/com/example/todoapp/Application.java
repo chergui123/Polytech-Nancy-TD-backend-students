@@ -15,9 +15,6 @@ import java.util.regex.Pattern;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.nonNull;
 
-/**
- * Main class of the application. Managing routing and HTTP layer.
- */
 public class Application {
 
     private static final Logger log = LoggerFactory.getLogger(Application.class);
@@ -26,7 +23,6 @@ public class Application {
 
     public static void main(String[] args) throws Exception {
         log.info("In-memory repository initialised");
-
         HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
         server.createContext("/tasks", Application::handleTasks);
         server.setExecutor(null);
@@ -42,9 +38,27 @@ public class Application {
         if ("POST".equals(method) && "/tasks".equals(path)) {
             Task input = JsonUtils.deserialize(new String(exchange.getRequestBody().readAllBytes(), UTF_8), Task.class);
             Task createdTask = dao.save(input);
-
             exchange.getResponseHeaders().add("Location", "/tasks/" + createdTask.id());
             sendResponse(exchange, 201, JsonUtils.serialize(createdTask));
+            return;
+        }
+        //endregion
+
+        //region Manage GET /tasks
+        if ("GET".equals(method) && "/tasks".equals(path)) {
+            String query = exchange.getRequestURI().getQuery();
+            Boolean todoOnly = null;
+            if (query != null && query.contains("todoOnly=true")) {
+                todoOnly = true;
+            } else if (query != null && query.contains("todoOnly=false")) {
+                todoOnly = false;
+            }
+            var tasks = dao.findAll(todoOnly);
+            if (tasks.isEmpty()) {
+                sendResponse(exchange, 204, null);
+            } else {
+                sendResponse(exchange, 200, JsonUtils.serialize(tasks));
+            }
             return;
         }
         //endregion
@@ -54,9 +68,37 @@ public class Application {
         if ("GET".equals(method) && m.matches()) {
             int id = Integer.parseInt(m.group(1));
             Optional<Task> task = dao.findById(id);
-
             if (task.isPresent()) {
                 sendResponse(exchange, 200, JsonUtils.serialize(task.get()));
+            } else {
+                sendResponse(exchange, 404, null);
+            }
+            return;
+        }
+        //endregion
+
+        //region Manage DELETE /tasks/{id}
+        m = ID_PATH.matcher(path);
+        if ("DELETE".equals(method) && m.matches()) {
+            int id = Integer.parseInt(m.group(1));
+            boolean deleted = dao.deleteById(id);
+            if (deleted) {
+                sendResponse(exchange, 204, null);
+            } else {
+                sendResponse(exchange, 404, null);
+            }
+            return;
+        }
+        //endregion
+
+        //region Manage PUT /tasks/{id}
+        m = ID_PATH.matcher(path);
+        if ("PUT".equals(method) && m.matches()) {
+            int id = Integer.parseInt(m.group(1));
+            Task input = JsonUtils.deserialize(new String(exchange.getRequestBody().readAllBytes(), UTF_8), Task.class);
+            boolean updated = dao.update(id, input);
+            if (updated) {
+                sendResponse(exchange, 204, null);
             } else {
                 sendResponse(exchange, 404, null);
             }
@@ -69,7 +111,7 @@ public class Application {
     }
 
     private static void sendResponse(HttpExchange exchange, int status, String json) throws IOException {
-        if(nonNull(json)) {
+        if (nonNull(json)) {
             exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
             byte[] bytes = json.getBytes(UTF_8);
             exchange.sendResponseHeaders(status, bytes.length);
